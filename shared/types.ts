@@ -1,6 +1,29 @@
 // Wire types shared between the server and client.
 
-export type Phase = 'betting' | 'spinning' | 'results';
+export type Phase = 'betting' | 'spinning' | 'results' | 'gameover';
+
+export type WinCondition =
+  | { type: 'none' }
+  /** After `spins` spins, whoever holds the most chips wins. */
+  | { type: 'mostChips'; spins: number }
+  /** First player to reach `amount` chips wins. */
+  | { type: 'target'; amount: number };
+
+export interface TableSettings {
+  startingBalance: number;
+  minBet: number;
+  maxBetPerSpot: number;
+  bettingSeconds: number;
+  /** Players with no bets when betting closes automatically bet the minimum on black. */
+  forcedMinBet: boolean;
+  winCondition: WinCondition;
+}
+
+export interface MatchState {
+  spinsPlayed: number;
+  over: boolean;
+  winners: string[];
+}
 
 export interface PublicPlayer {
   id: string;
@@ -15,6 +38,8 @@ export interface Bet {
   playerId: string;
   spot: string;
   amount: number;
+  /** Placed automatically by the forced-minimum-bet rule. */
+  forced?: boolean;
 }
 
 export interface SpinInfo {
@@ -50,7 +75,12 @@ export interface GameState {
   lastRound: RoundResult | null;
   /** Most recent results first. */
   history: number[];
-  limits: { minBet: number; maxBetPerSpot: number; startingBalance: number };
+  /** Player who can change table settings. */
+  hostId: string | null;
+  /** Players who have locked in their bets this round. */
+  lockedIds: string[];
+  settings: TableSettings;
+  match: MatchState;
 }
 
 export interface Ack {

@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { io } from 'socket.io-client';
-import type { Ack, GameState, JoinAck } from '../../shared/types';
+import type { Ack, GameState, JoinAck, TableSettings } from '../../shared/types';
 
 // Same origin: Vite proxies /socket.io to the game server in dev,
 // and the game server serves the built client in production.
@@ -106,5 +106,8 @@ export const api = {
   placeBet: (spot: string, amount: number) => emit('bet:place', { spot, amount }),
   removeBet: (spot: string, amount?: number) => emit('bet:remove', { spot, amount }),
   clearBets: () => emit('bet:clear'),
+  setLocked: (locked: boolean) => emit('lock', { locked }),
   rebuy: () => emit('rebuy'),
+  updateSettings: (settings: TableSettings) => emit('settings:update', settings),
+  newGame: () => emit('game:new'),
 };

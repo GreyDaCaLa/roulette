@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { colorOf } from '../../shared/roulette';
 import type { Ack, Bet, GameState } from '../../shared/types';
 import BettingBoard from './components/BettingBoard';
-import { History, PhaseBanner, PlayersPanel } from './components/Panels';
+import { GameOver, History, MatchStatus, PhaseBanner, PlayersPanel } from './components/Panels';
+import SettingsModal from './components/SettingsModal';
 import Wheel3D from './components/Wheel3D';
 import { api, isDisplayMode, join, useGame } from './game';
 
-const CHIPS = [1, 5, 25, 100, 500];
+const CHIPS = [1, 5, 10, 25, 50, 100, 500];
 const CHIP_COLORS: Record<number, string> = {
-  1: '#e8e8e8', 5: '#c62828', 25: '#2e7d32', 100: '#212121', 500: '#6a1b9a',
+  1: '#e8e8e8', 5: '#c62828', 10: '#1565c0', 25: '#2e7d32', 50: '#ef6c00', 100: '#212121', 500: '#6a1b9a',
 };
 
 export default function App() {
@@ -62,6 +63,7 @@ interface TableProps {
 function Table({ state, playerId, connected, display }: TableProps) {
   const [chip, setChip] = useState(5);
   const [toast, setToast] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
   const undoStack = useRef<{ spot: string; amount: number }[]>([]);
   const previousBets = useRef<Bet[]>([]);
   const toastTimer = useRef<number | undefined>(undefined);
@@ -69,7 +71,10 @@ function Table({ state, playerId, connected, display }: TableProps) {
   const me = state.players.find((p) => p.id === playerId) ?? null;
   const myBets = state.bets.filter((b) => b.playerId === playerId);
   const myStake = myBets.reduce((t, b) => t + b.amount, 0);
-  const canBet = !!me && state.phase === 'betting';
+  const isHost = !!me && state.hostId === me.id;
+  const isLocked = !!me && state.lockedIds.includes(me.id);
+  const canBet = !!me && state.phase === 'betting' && !isLocked;
+  const canEditSettings = isHost && (state.phase === 'betting' || state.phase === 'gameover');
 
   useEffect(() => {
     undoStack.current = [];
@@ -124,6 +129,15 @@ function Table({ state, playerId, connected, display }: TableProps) {
         <PhaseBanner state={state} />
         <div className="header-right">
           {!connected && <span className="offline-badge">Reconnecting…</span>}
+          {isHost && (
+            <button
+              onClick={() => setShowSettings(true)}
+              disabled={!canEditSettings}
+              title={canEditSettings ? 'Change table settings' : 'Wait for the spin to finish'}
+            >
+              ⚙ Table settings
+            </button>
+          )}
           {me && (
             <div className="my-balance">
               <span className="dot" style={{ background: me.color }} />
@@ -144,6 +158,7 @@ function Table({ state, playerId, connected, display }: TableProps) {
           )}
         </section>
         <aside className="side">
+          <MatchStatus state={state} />
           <PlayersPanel state={state} playerId={playerId} />
           <History history={state.history} />
         </aside>
@@ -173,6 +188,14 @@ function Table({ state, playerId, connected, display }: TableProps) {
               ))}
             </div>
             <div className="actions">
+              <button
+                className={`lock-btn ${isLocked ? 'locked' : ''}`}
+                disabled={state.phase !== 'betting'}
+                onClick={async () => check(await api.setLocked(!isLocked))}
+                title="When everyone at the table locks in, the ball spins right away"
+              >
+                {isLocked ? '🔒 Locked in (unlock)' : 'Lock in'}
+              </button>
               <button onClick={undo} disabled={!canBet || myBets.length === 0}>Undo</button>
               <button onClick={clear} disabled={!canBet || myBets.length === 0}>Clear</button>
               <button
@@ -181,11 +204,13 @@ function Table({ state, playerId, connected, display }: TableProps) {
               >
                 Rebet
               </button>
-              {me.balance < state.limits.minBet && myBets.length === 0 && (
-                <button className="primary" onClick={async () => check(await api.rebuy())}>
-                  Get {state.limits.startingBalance} more play chips
-                </button>
-              )}
+              {state.settings.winCondition.type === 'none' &&
+                me.balance < state.settings.minBet &&
+                myBets.length === 0 && (
+                  <button className="primary" onClick={async () => check(await api.rebuy())}>
+                    Get {state.settings.startingBalance.toLocaleString()} more play chips
+                  </button>
+                )}
             </div>
             <p className="hint muted">
               Click to bet · click lines/corners for splits, streets & corners · right-click removes your bet
@@ -197,6 +222,15 @@ function Table({ state, playerId, connected, display }: TableProps) {
       <footer>
         Play money only: this simulator never accepts, holds, or pays out real money.
       </footer>
+      {state.phase === 'gameover' && !showSettings && (
+        <GameOver
+          state={state}
+          isHost={isHost}
+          onNewGame={async () => check(await api.newGame())}
+          onSettings={() => setShowSettings(true)}
+        />
+      )}
+      {showSettings && <SettingsModal settings={state.settings} onClose={() => setShowSettings(false)} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );

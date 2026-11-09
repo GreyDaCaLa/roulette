@@ -7,33 +7,41 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
 import { SPOTS_BY_ID, spotWins, winningReturn } from '../../shared/roulette';
+import { validateSettings } from '../../shared/settings';
 import type {
   Ack,
   Bet,
   GameState,
   JoinAck,
+  MatchState,
   Phase,
   PlayerRoundResult,
   PublicPlayer,
   RoundResult,
   SpinInfo,
+  TableSettings,
 } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
-// Config (override with environment variables)
+// Config (environment variables set the defaults; the host can change them in game)
 // ---------------------------------------------------------------------------
 function envNum(key: string, fallback: number) {
   const v = Number(process.env[key]);
   return Number.isFinite(v) && v > 0 ? v : fallback;
 }
 const PORT = envNum('PORT', 3001);
-const BETTING_MS = envNum('BETTING_SECONDS', 20) * 1000;
 const SPIN_MS = envNum('SPIN_SECONDS', 9) * 1000;
 const RESULTS_MS = envNum('RESULTS_SECONDS', 6) * 1000;
-const STARTING_BALANCE = envNum('STARTING_BALANCE', 1000);
-const MAX_BET_PER_SPOT = envNum('MAX_BET_PER_SPOT', 500);
-const MIN_BET = 1;
 const HISTORY_LENGTH = 20;
+
+const DEFAULT_SETTINGS: TableSettings = {
+  startingBalance: envNum('STARTING_BALANCE', 1000),
+  minBet: 1,
+  maxBetPerSpot: envNum('MAX_BET_PER_SPOT', 500),
+  bettingSeconds: envNum('BETTING_SECONDS', 20),
+  forcedMinBet: process.env.FORCED_MIN_BET === 'true',
+  winCondition: { type: 'none' },
+};
 
 const PLAYER_COLORS = [
   '#f6c945', '#4dd0e1', '#ba68c8', '#ff8a65', '#aed581', '#f06292',
@@ -53,12 +61,16 @@ class Game {
   private byToken = new Map<string, Player>();
   /** key: `${playerId}|${spotId}` */
   private bets = new Map<string, Bet>();
+  private locked = new Set<string>();
   private phase: Phase = 'betting';
   private phaseEndsAt: number | null = null;
   private roundId = 1;
   private spin: SpinInfo | null = null;
   private lastRound: RoundResult | null = null;
   private history: number[] = [];
+  private hostId: string | null = null;
+  private settings: TableSettings = DEFAULT_SETTINGS;
+  private match: MatchState = { spinsPlayed: 0, over: false, winners: [] };
   private timer: NodeJS.Timeout | null = null;
 
   constructor(private onChange: () => void) {}
@@ -76,9 +88,14 @@ class Game {
       spin: this.spin,
       lastRound: this.lastRound,
       history: this.history,
-      limits: { minBet: MIN_BET, maxBetPerSpot: MAX_BET_PER_SPOT, startingBalance: STARTING_BALANCE },
+      hostId: this.hostId,
+      lockedIds: [...this.locked],
+      settings: this.settings,
+      match: this.match,
     };
   }
+
+  // ----- Players ------------------------------------------------------------
 
   join(socketId: string, token: unknown, rawName: unknown): { player: Player } {
     const name =
@@ -92,7 +109,7 @@ class Game {
         token: randomUUID(),
         name,
         color: PLAYER_COLORS[this.players.size % PLAYER_COLORS.length],
-        balance: STARTING_BALANCE,
+        balance: this.settings.startingBalance,
         connected: true,
         sockets: new Set(),
       };
@@ -102,6 +119,10 @@ class Game {
     player.name = name;
     player.sockets.add(socketId);
     player.connected = true;
+
+    const host = this.hostId ? this.players.get(this.hostId) : undefined;
+    if (!host || !host.connected) this.hostId = player.id;
+
     this.onChange();
     return { player };
   }
@@ -109,39 +130,59 @@ class Game {
   leave(player: Player, socketId: string) {
     player.sockets.delete(socketId);
     player.connected = player.sockets.size > 0;
+    if (!player.connected && this.hostId === player.id) {
+      // Hand hosting to the longest-seated connected player (if any).
+      const next = [...this.players.values()].find((p) => p.connected);
+      if (next) this.hostId = next.id;
+    }
     this.onChange();
+    this.checkAllLocked();
+  }
+
+  // ----- Betting ------------------------------------------------------------
+
+  private canChangeBets(player: Player): string | null {
+    if (this.phase !== 'betting') return this.phase === 'gameover' ? 'The game is over' : 'Bets are closed';
+    if (this.locked.has(player.id)) return 'You are locked in - unlock to change bets';
+    return null;
   }
 
   placeBet(player: Player, spotId: unknown, rawAmount: unknown): string | null {
-    if (this.phase !== 'betting') return 'Bets are closed';
+    const blocked = this.canChangeBets(player);
+    if (blocked) return blocked;
     const spot = typeof spotId === 'string' ? SPOTS_BY_ID.get(spotId) : undefined;
     if (!spot) return 'Unknown bet';
     const amount = Number(rawAmount);
-    if (!Number.isInteger(amount) || amount < MIN_BET) return `Minimum bet is ${MIN_BET}`;
+    const { minBet, maxBetPerSpot, bettingSeconds } = this.settings;
+    if (!Number.isInteger(amount) || amount <= 0) return 'Invalid amount';
     if (amount > player.balance) return 'Not enough chips';
 
     const key = `${player.id}|${spot.id}`;
     const existing = this.bets.get(key);
     const total = (existing?.amount ?? 0) + amount;
-    if (total > MAX_BET_PER_SPOT) return `Max ${MAX_BET_PER_SPOT} per spot`;
+    if (total < minBet) return `Minimum bet is ${minBet}`;
+    if (total > maxBetPerSpot) return `Max ${maxBetPerSpot} per spot`;
 
     player.balance -= amount;
     this.bets.set(key, { playerId: player.id, spot: spot.id, amount: total });
 
     // Countdown starts with the first bet of the round.
-    if (this.phaseEndsAt === null) this.schedule(BETTING_MS, () => this.startSpin());
+    if (this.phaseEndsAt === null) this.schedule(bettingSeconds * 1000, () => this.startSpin());
     this.onChange();
     return null;
   }
 
   /** Remove `amount` from a bet (or the whole bet if amount is omitted). */
   removeBet(player: Player, spotId: unknown, rawAmount?: unknown): string | null {
-    if (this.phase !== 'betting') return 'Bets are closed';
+    const blocked = this.canChangeBets(player);
+    if (blocked) return blocked;
     const key = `${player.id}|${String(spotId)}`;
     const bet = this.bets.get(key);
     if (!bet) return 'No bet there';
-    const amount = rawAmount === undefined ? bet.amount : Math.min(bet.amount, Number(rawAmount));
+    let amount = rawAmount === undefined ? bet.amount : Math.min(bet.amount, Number(rawAmount));
     if (!Number.isInteger(amount) || amount <= 0) return 'Invalid amount';
+    // Never leave a bet below the table minimum: remove it entirely instead.
+    if (bet.amount - amount > 0 && bet.amount - amount < this.settings.minBet) amount = bet.amount;
 
     bet.amount -= amount;
     player.balance += amount;
@@ -151,7 +192,8 @@ class Game {
   }
 
   clearBets(player: Player): string | null {
-    if (this.phase !== 'betting') return 'Bets are closed';
+    const blocked = this.canChangeBets(player);
+    if (blocked) return blocked;
     for (const [key, bet] of this.bets) {
       if (bet.playerId === player.id) {
         player.balance += bet.amount;
@@ -162,22 +204,86 @@ class Game {
     return null;
   }
 
-  /** Free play-money top-up when a player has run out. */
+  /** Lock in (or unlock) your bets. When every connected player is locked in, the ball spins. */
+  setLocked(player: Player, locked: boolean): string | null {
+    if (this.phase !== 'betting') return 'Bets are closed';
+    if (locked) this.locked.add(player.id);
+    else this.locked.delete(player.id);
+    this.onChange();
+    this.checkAllLocked();
+    return null;
+  }
+
+  private checkAllLocked() {
+    if (this.phase !== 'betting' || this.bets.size === 0) return;
+    const connected = [...this.players.values()].filter((p) => p.connected);
+    if (connected.length > 0 && connected.every((p) => this.locked.has(p.id))) this.startSpin();
+  }
+
+  /** Free play-money top-up when a player has run out (free play only). */
   rebuy(player: Player): string | null {
+    if (this.settings.winCondition.type !== 'none') return 'Rebuys are only allowed in free play';
     const hasBets = [...this.bets.values()].some((b) => b.playerId === player.id);
-    if (player.balance >= MIN_BET || hasBets) return 'You still have chips';
-    player.balance = STARTING_BALANCE;
+    if (player.balance >= this.settings.minBet || hasBets) return 'You still have chips';
+    player.balance = this.settings.startingBalance;
     this.onChange();
     return null;
   }
 
+  // ----- Host controls ------------------------------------------------------
+
+  updateSettings(player: Player, raw: unknown): string | null {
+    if (player.id !== this.hostId) return 'Only the host can change table settings';
+    if (this.phase === 'spinning' || this.phase === 'results') return 'Wait for the spin to finish';
+    const { settings, error } = validateSettings(raw);
+    if (!settings) return error;
+    this.settings = settings;
+    this.startNewGame();
+    return null;
+  }
+
+  newGame(player: Player): string | null {
+    if (player.id !== this.hostId) return 'Only the host can start a new game';
+    if (this.phase === 'spinning' || this.phase === 'results') return 'Wait for the spin to finish';
+    this.startNewGame();
+    return null;
+  }
+
+  /** Resets everyone's chips to the starting amount and starts a fresh match. */
+  private startNewGame() {
+    for (const p of this.players.values()) p.balance = this.settings.startingBalance;
+    this.match = { spinsPlayed: 0, over: false, winners: [] };
+    this.lastRound = null;
+    this.newRound();
+  }
+
+  // ----- Round loop -----------------------------------------------------------
+
   private schedule(ms: number, fn: () => void) {
-    if (this.timer) clearTimeout(this.timer);
+    this.clearTimer();
     this.phaseEndsAt = Date.now() + ms;
     this.timer = setTimeout(fn, ms);
   }
 
+  private clearTimer() {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  /** Forced-minimum-bet rule: anyone seated without a bet puts the minimum on black. */
+  private placeForcedBets() {
+    if (!this.settings.forcedMinBet) return;
+    const { minBet } = this.settings;
+    const hasBet = new Set([...this.bets.values()].map((b) => b.playerId));
+    for (const p of this.players.values()) {
+      if (!p.connected || hasBet.has(p.id) || p.balance < minBet) continue;
+      p.balance -= minBet;
+      this.bets.set(`${p.id}|black`, { playerId: p.id, spot: 'black', amount: minBet, forced: true });
+    }
+  }
+
   private startSpin() {
+    this.placeForcedBets();
     this.phase = 'spinning';
     this.spin = {
       roundId: this.roundId,
@@ -210,17 +316,44 @@ class Game {
 
     this.lastRound = { roundId: this.roundId, number: result, players: [...perPlayer.values()] };
     this.history = [result, ...this.history].slice(0, HISTORY_LENGTH);
+    this.checkWinCondition();
     this.phase = 'results';
-    this.schedule(RESULTS_MS, () => this.newRound());
+    this.schedule(RESULTS_MS, () => (this.match.over ? this.endGame() : this.newRound()));
+    this.onChange();
+  }
+
+  private checkWinCondition() {
+    this.match.spinsPlayed += 1;
+    const wc = this.settings.winCondition;
+    const ranked = [...this.players.values()].sort((a, b) => b.balance - a.balance);
+    let winners: Player[] = [];
+
+    if (wc.type === 'mostChips' && this.match.spinsPlayed >= wc.spins && ranked.length > 0) {
+      winners = ranked.filter((p) => p.balance === ranked[0].balance);
+    } else if (wc.type === 'target') {
+      const reached = ranked.filter((p) => p.balance >= wc.amount);
+      // If several players cross the line on the same spin, the highest stack wins (ties share).
+      if (reached.length > 0) winners = reached.filter((p) => p.balance === reached[0].balance);
+    }
+    if (winners.length > 0) this.match = { ...this.match, over: true, winners: winners.map((p) => p.id) };
+  }
+
+  private endGame() {
+    this.clearTimer();
+    this.bets.clear();
+    this.locked.clear();
+    this.phase = 'gameover';
+    this.phaseEndsAt = null;
     this.onChange();
   }
 
   private newRound() {
+    this.clearTimer();
     this.bets.clear();
+    this.locked.clear();
     this.roundId += 1;
     this.phase = 'betting';
     this.phaseEndsAt = null;
-    this.timer = null;
     this.onChange();
   }
 }
@@ -259,7 +392,10 @@ io.on('connection', (socket) => {
   socket.on('bet:place', withPlayer((p, d) => game.placeBet(p, d.spot, d.amount)));
   socket.on('bet:remove', withPlayer((p, d) => game.removeBet(p, d.spot, d.amount)));
   socket.on('bet:clear', withPlayer((p) => game.clearBets(p)));
+  socket.on('lock', withPlayer((p, d) => game.setLocked(p, d.locked !== false)));
   socket.on('rebuy', withPlayer((p) => game.rebuy(p)));
+  socket.on('settings:update', withPlayer((p, d) => game.updateSettings(p, d)));
+  socket.on('game:new', withPlayer((p) => game.newGame(p)));
 
   socket.on('disconnect', () => {
     if (player) game.leave(player, socket.id);
