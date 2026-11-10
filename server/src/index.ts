@@ -6,7 +6,7 @@ import { networkInterfaces } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
-import { SPOTS_BY_ID, spotWins, winningReturn } from '../../shared/roulette';
+import { getSpots, pocketCount, spotWins, winningReturn, type WheelType } from '../../shared/roulette';
 import { validateSettings } from '../../shared/settings';
 import type {
   Ack,
@@ -34,7 +34,9 @@ const SPIN_MS = envNum('SPIN_SECONDS', 9) * 1000;
 const RESULTS_MS = envNum('RESULTS_SECONDS', 6) * 1000;
 const HISTORY_LENGTH = 20;
 
+const WHEEL_ENV = process.env.WHEEL_TYPE;
 const DEFAULT_SETTINGS: TableSettings = {
+  wheel: WHEEL_ENV === 'single' || WHEEL_ENV === 'triple' ? (WHEEL_ENV as WheelType) : 'double',
   startingBalance: envNum('STARTING_BALANCE', 1000),
   minBet: 1,
   maxBetPerSpot: envNum('MAX_BET_PER_SPOT', 500),
@@ -150,7 +152,7 @@ class Game {
   placeBet(player: Player, spotId: unknown, rawAmount: unknown): string | null {
     const blocked = this.canChangeBets(player);
     if (blocked) return blocked;
-    const spot = typeof spotId === 'string' ? SPOTS_BY_ID.get(spotId) : undefined;
+    const spot = typeof spotId === 'string' ? getSpots(this.settings.wheel).byId.get(spotId) : undefined;
     if (!spot) return 'Unknown bet';
     const amount = Number(rawAmount);
     const { minBet, maxBetPerSpot, bettingSeconds } = this.settings;
@@ -237,6 +239,10 @@ class Game {
     if (this.phase === 'spinning' || this.phase === 'results') return 'Wait for the spin to finish';
     const { settings, error } = validateSettings(raw);
     if (!settings) return error;
+    if (settings.wheel !== this.settings.wheel) {
+      this.history = []; // results from a different wheel would be misleading
+      this.spin = null;
+    }
     this.settings = settings;
     this.startNewGame();
     return null;
@@ -289,7 +295,8 @@ class Game {
       roundId: this.roundId,
       startedAt: Date.now(),
       duration: SPIN_MS,
-      result: randomInt(0, 37), // cryptographically secure, uniform 0..36
+      // Cryptographically secure, uniform over every pocket (0-36, plus 37 = 00, 38 = 000).
+      result: randomInt(0, pocketCount(this.settings.wheel)),
     };
     this.schedule(SPIN_MS, () => this.settle());
     this.onChange();
@@ -298,9 +305,10 @@ class Game {
   private settle() {
     const result = this.spin!.result;
     const perPlayer = new Map<string, PlayerRoundResult>();
+    const spots = getSpots(this.settings.wheel).byId;
 
     for (const bet of this.bets.values()) {
-      const spot = SPOTS_BY_ID.get(bet.spot)!;
+      const spot = spots.get(bet.spot)!;
       const entry = perPlayer.get(bet.playerId) ?? {
         playerId: bet.playerId, staked: 0, returned: 0, net: 0,
       };

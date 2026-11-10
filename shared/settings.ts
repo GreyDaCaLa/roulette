@@ -1,3 +1,4 @@
+import { WHEEL_TYPES } from './roulette';
 import type { TableSettings, WinCondition } from './types';
 
 /** Allowed [min, max] ranges for each setting. */
@@ -52,7 +53,12 @@ export function validateSettings(raw: any): Result {
 
   const forcedMinBet = raw?.forcedMinBet === true;
 
-  return { settings: { startingBalance, minBet, maxBetPerSpot, bettingSeconds, forcedMinBet, winCondition } };
+  const wheel = raw?.wheel ?? 'double';
+  if (!WHEEL_TYPES.some((w) => w.id === wheel)) return { error: 'Unknown table type' };
+
+  return {
+    settings: { wheel, startingBalance, minBet, maxBetPerSpot, bettingSeconds, forcedMinBet, winCondition },
+  };
 }
 
 export function describeWinCondition(wc: WinCondition) {

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { WHEEL_TYPES, type WheelType } from '../../../shared/roulette';
 import { BOUNDS, validateSettings } from '../../../shared/settings';
 import type { TableSettings, WinCondition } from '../../../shared/types';
 import { api } from '../game';
@@ -10,6 +11,7 @@ interface Props {
 
 export default function SettingsModal({ settings, onClose }: Props) {
   const [form, setForm] = useState({
+    wheel: settings.wheel as WheelType,
     startingBalance: String(settings.startingBalance),
     minBet: String(settings.minBet),
     maxBetPerSpot: String(settings.maxBetPerSpot),
@@ -24,7 +26,7 @@ export default function SettingsModal({ settings, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  type TextKey = Exclude<keyof typeof form, 'forcedMinBet'>;
+  type TextKey = Exclude<keyof typeof form, 'forcedMinBet' | 'wheel'>;
   const field = (key: TextKey) => ({
     value: form[key],
     onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
@@ -40,6 +42,7 @@ export default function SettingsModal({ settings, onClose }: Props) {
           ? { type: 'target', amount: Number(form.target) }
           : { type: 'none' };
     const check = validateSettings({
+      wheel: form.wheel,
       startingBalance: Number(form.startingBalance),
       minBet: Number(form.minBet),
       maxBetPerSpot: Number(form.maxBetPerSpot),
@@ -59,6 +62,20 @@ export default function SettingsModal({ settings, onClose }: Props) {
     <div className="modal-backdrop" onClick={onClose}>
       <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <h2>Table settings</h2>
+
+        <label className="select-field">
+          Table type
+          <select
+            value={form.wheel}
+            onChange={(e) => setForm((f) => ({ ...f, wheel: e.target.value as WheelType }))}
+          >
+            {WHEEL_TYPES.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.label}
+              </option>
+            ))}
+          </select>
+        </label>
 
         <div className="form-grid">
           <label>

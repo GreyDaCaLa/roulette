@@ -58,7 +58,6 @@ socket.on('disconnect', () => set({ connected: false }));
 export function isDisplayMode() {
   return new URLSearchParams(location.search).has('display');
 }
-
 /** Current time on the server's clock (ms). */
 export function serverNow() {
   return Date.now() + clockOffset;

@@ -1,4 +1,5 @@
 // Wire types shared between the server and client.
+import type { WheelType } from './roulette';
 
 export type Phase = 'betting' | 'spinning' | 'results' | 'gameover';
 
@@ -10,6 +11,8 @@ export type WinCondition =
   | { type: 'target'; amount: number };
 
 export interface TableSettings {
+  /** 0 (European), 00 (American) or 000 (triple zero) table. */
+  wheel: WheelType;
   startingBalance: number;
   minBet: number;
   maxBetPerSpot: number;

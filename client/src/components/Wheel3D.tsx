@@ -1,14 +1,13 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
-import { RED_NUMBERS, WHEEL_ORDER } from '../../../shared/roulette';
+import { colorOf, labelOf, WHEEL_ORDERS, type WheelType } from '../../../shared/roulette';
 import type { SpinInfo } from '../../../shared/types';
 import { serverNow } from '../game';
 
 // Geometry (world units)
 const R = 2.2; // rotor radius
-const STEP = (Math.PI * 2) / WHEEL_ORDER.length;
 const POCKET_IN = 0.6 * R;
 const POCKET_OUT = 0.78 * R;
 const POCKET_R = (POCKET_IN + POCKET_OUT) / 2;
@@ -24,12 +23,19 @@ const GOLD = '#d4af37';
 const WOOD = '#5a3418';
 const DARK_WOOD = '#2e1a0c';
 
+const POCKET_COLORS = { green: '#0e7a3a', red: '#b3202a', black: '#151515' } as const;
+
+const stepOf = (wheel: WheelType) => (Math.PI * 2) / WHEEL_ORDERS[wheel].length;
+
 /** Angle of a pocket in the rotor's local frame (matches the texture). */
-function pocketAngle(n: number) {
-  return WHEEL_ORDER.indexOf(n as (typeof WHEEL_ORDER)[number]) * STEP;
+function pocketAngle(wheel: WheelType, n: number) {
+  const i = WHEEL_ORDERS[wheel].indexOf(n);
+  return Math.max(0, i) * stepOf(wheel);
 }
 
-function makeWheelTexture() {
+function makeWheelTexture(wheel: WheelType) {
+  const WHEEL_ORDER = WHEEL_ORDERS[wheel];
+  const STEP = stepOf(wheel);
   const S = 2048;
   const c = S / 2;
   const cv = document.createElement('canvas');
@@ -51,7 +57,7 @@ function makeWheelTexture() {
 
   WHEEL_ORDER.forEach((n, i) => {
     const a = i * STEP;
-    const color = n === 0 ? '#0e7a3a' : RED_NUMBERS.has(n) ? '#b3202a' : '#151515';
+    const color = POCKET_COLORS[colorOf(n)];
     // Number + pocket wedge
     ctx.beginPath();
     ctx.arc(c, c, 0.95 * c, a - STEP / 2, a + STEP / 2);
@@ -71,10 +77,13 @@ function makeWheelTexture() {
     ctx.translate(c + Math.cos(a) * 0.865 * c, c + Math.sin(a) * 0.865 * c);
     ctx.rotate(a + Math.PI / 2);
     ctx.fillStyle = '#f4efe1';
-    ctx.font = `bold ${Math.round(0.075 * c)}px Georgia, "Times New Roman", serif`;
+    const label = labelOf(n);
+    // "000" needs a smaller font to fit its (narrower, on a 39-pocket wheel) slot.
+    const size = label.length >= 3 ? 0.058 : 0.075;
+    ctx.font = `bold ${Math.round(size * c)}px Georgia, "Times New Roman", serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(n), 0, 0);
+    ctx.fillText(label, 0, 0);
     ctx.restore();
   });
 
@@ -107,11 +116,11 @@ function makeWheelTexture() {
 const smooth = (t: number) => t * t * (3 - 2 * t);
 
 /** Ball position in the rotor's local frame, derived purely from server time. */
-function ballPose(spin: SpinInfo | null, now: number) {
-  if (!spin) return { angle: pocketAngle(0), radius: POCKET_R, y: REST_Y };
+function ballPose(wheel: WheelType, spin: SpinInfo | null, now: number) {
+  if (!spin) return { angle: pocketAngle(wheel, 0), radius: POCKET_R, y: REST_Y };
   const p = Math.min(1, Math.max(0, (now - spin.startedAt) / spin.duration));
   const ease = 1 - Math.pow(1 - p, 3);
-  const angle = pocketAngle(spin.result) - BALL_LAPS * Math.PI * 2 * (1 - ease);
+  const angle = pocketAngle(wheel, spin.result) - BALL_LAPS * Math.PI * 2 * (1 - ease);
   if (p < DROP_AT) return { angle, radius: TRACK_R, y: TRACK_Y };
   const q = (p - DROP_AT) / (1 - DROP_AT);
   const s = smooth(Math.min(1, q * 1.4));
@@ -123,12 +132,15 @@ function ballPose(spin: SpinInfo | null, now: number) {
   };
 }
 
-function Rotor({ spin }: { spin: SpinInfo | null }) {
+function Rotor({ spin, wheel }: { spin: SpinInfo | null; wheel: WheelType }) {
   const rotor = useRef<THREE.Group>(null!);
   const ball = useRef<THREE.Mesh>(null!);
-  const texture = useMemo(makeWheelTexture, []);
+  const texture = useMemo(() => makeWheelTexture(wheel), [wheel]);
+  useEffect(() => () => texture.dispose(), [texture]);
   const spinRef = useRef(spin);
   spinRef.current = spin;
+  const wheelRef = useRef(wheel);
+  wheelRef.current = wheel;
 
   useFrame((_, dt) => {
     const s = spinRef.current;
@@ -139,18 +151,17 @@ function Rotor({ spin }: { spin: SpinInfo | null }) {
       if (p >= 0 && p < 1) speed += 1.4 * (1 - p);
     }
     rotor.current.rotation.y += speed * Math.min(dt, 0.1);
-    const { angle, radius, y } = ballPose(s, now);
+    const { angle, radius, y } = ballPose(wheelRef.current, s, now);
     ball.current.position.set(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
   });
 
-  const frets = useMemo(
-    () =>
-      WHEEL_ORDER.map((_, i) => {
-        const a = i * STEP + STEP / 2;
-        return { a, x: Math.cos(a) * POCKET_R, z: Math.sin(a) * POCKET_R };
-      }),
-    [],
-  );
+  const frets = useMemo(() => {
+    const step = stepOf(wheel);
+    return WHEEL_ORDERS[wheel].map((_, i) => {
+      const a = i * step + step / 2;
+      return { a, x: Math.cos(a) * POCKET_R, z: Math.sin(a) * POCKET_R };
+    });
+  }, [wheel]);
 
   return (
     <group ref={rotor}>
@@ -241,7 +252,7 @@ function Bowl() {
   );
 }
 
-export default function Wheel3D({ spin }: { spin: SpinInfo | null }) {
+export default function Wheel3D({ spin, wheel }: { spin: SpinInfo | null; wheel: WheelType }) {
   return (
     <Canvas shadows dpr={[1, 2]} camera={{ position: [0, 4.4, 4.2], fov: 42 }}>
       <color attach="background" args={['#06301b']} />
@@ -260,7 +271,7 @@ export default function Wheel3D({ spin }: { spin: SpinInfo | null }) {
       />
       <pointLight position={[-3, 3, -2]} intensity={8} color="#ffd9a0" />
       <Bowl />
-      <Rotor spin={spin} />
+      <Rotor spin={spin} wheel={wheel} />
       <OrbitControls enablePan={false} minDistance={3.5} maxDistance={9} maxPolarAngle={Math.PI / 2.3} />
     </Canvas>
   );

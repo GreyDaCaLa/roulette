@@ -187,7 +187,7 @@ header {
 .cell.hl { filter: brightness(1.45); box-shadow: inset 0 0 0 3px var(--gold); }
 .cell.win { box-shadow: inset 0 0 0 4px var(--gold), 0 0 22px var(--gold); z-index: 1; animation: glow 0.9s ease-in-out infinite alternate; }
 @keyframes glow { to { filter: brightness(1.5); } }
-.diamond { width: 3cqw; height: 1.8cqw; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); border: none; }
+.diamond { display: inline-block; vertical-align: middle; width: 3cqw; height: 1.8cqw; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); border: none; }
 .diamond.red { background: var(--red); }
 .diamond.black { background: var(--black); }
 
@@ -232,7 +232,30 @@ header {
 .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .hint { flex-basis: 100%; margin: 0; font-size: 0.8rem; }
 
-.chips { flex-wrap: wrap; }
+.chips { flex-wrap: wrap; align-items: center; }
+.chip-btn.unit {
+  background: radial-gradient(circle, #f3d36b, #b8892a);
+  color: #1d1404;
+  text-shadow: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  gap: 1px;
+}
+.chip-btn.unit .unit-value { font-size: 0.85rem; font-weight: 800; }
+.chip-btn.unit .unit-label { font-size: 0.5rem; letter-spacing: 0.05em; }
+.unit-input { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+.unit-input input {
+  width: 6.5rem;
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--gold);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text);
+}
 .lock-btn { font-weight: 600; border-color: var(--gold); }
 .lock-btn.locked { background: var(--gold); color: #1d1404; }
 .lock-count { margin-left: 0.4rem; font-size: 0.85rem; color: var(--gold); text-transform: none; }
@@ -271,6 +294,15 @@ header {
   color: var(--text);
 }
 .modal input:disabled { opacity: 0.4; }
+.select-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.9rem; }
+.modal select {
+  font: inherit;
+  padding: 0.45rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: #08301c;
+  color: var(--text);
+}
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0.75rem; }
 .form-grid label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.9rem; }
 .win-options { border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 10px; padding: 0.6rem 0.9rem; display: flex; flex-direction: column; gap: 0.55rem; }
@@ -303,8 +335,131 @@ footer { margin-top: 1.5rem; text-align: center; font-size: 0.8rem; color: var(-
   z-index: 10;
 }
 
-/* Display mode: bigger wheel for a TV */
-.app.display .wheel-panel { height: 55vh; }
+/* ---------- Display mode (TV / shared screen) ----------
+   Last-10 strip | 3D wheel | upright betting board, filling one screen;
+   QR / players / rules row below. */
+.app.display { max-width: none; }
+.cell-label, .chip-amt { display: inline-block; }
+.display-screen {
+  /* Fill the viewport (minus the .app top padding) so the wheel reaches the bottom edge. */
+  height: calc(100dvh - 0.75rem);
+  min-height: 520px;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0.75rem;
+}
+.display-main {
+  flex: 1;
+  min-height: 0;
+  container-type: size; /* lets the board size itself from this row's height (cqh) */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: stretch;
+}
+.display-main .wheel-panel { height: 100%; min-height: 0; }
+.display-main .last-numbers { align-self: start; }
+
+.last-numbers {
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 0.75rem 0.6rem;
+  text-align: center;
+  position: sticky;
+  top: 0.75rem;
+}
+.last-numbers h2 { font-size: 0.95rem; }
+.last-numbers ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+}
+.last-num {
+  width: clamp(2.6rem, 6.2vh, 4rem);
+  height: clamp(2.6rem, 6.2vh, 4rem);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font: 700 clamp(1.1rem, 2.8vh, 1.7rem) Georgia, serif;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  opacity: 0.85;
+}
+.last-num.red { background: var(--red); }
+.last-num.black { background: var(--black); }
+.last-num.green { background: var(--green); }
+.last-num.latest {
+  width: clamp(3.4rem, 8.5vh, 5.2rem);
+  height: clamp(3.4rem, 8.5vh, 5.2rem);
+  font-size: clamp(1.5rem, 3.8vh, 2.3rem);
+  border: 3px solid var(--gold);
+  box-shadow: 0 0 18px rgba(212, 175, 55, 0.55);
+  opacity: 1;
+  animation: pop 0.4s ease-out;
+}
+
+/* Upright board beside the wheel, same height. */
+.board-side { display: grid; place-items: center; }
+.board-rotated-frame {
+  /* Board length = row height. Natural upright width is 5/14 of that;
+     --board-stretch widens it to give cells and chips more room. */
+  --board-stretch: 1.35;
+  --board-h: 100cqh;
+  --board-w: calc(var(--board-h) * 5 / 14 * var(--board-stretch));
+  position: relative;
+  height: var(--board-h);
+  width: var(--board-w);
+}
+.board.rotated {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--board-h);
+  height: var(--board-w);
+  aspect-ratio: auto;
+  min-width: 0;
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+.board.rotated .cell-label,
+.board.rotated .chip-amt { transform: rotate(-90deg); }
+.board.rotated .cell { font-size: 2.6cqw; }
+.board.rotated .cell.felt { font-size: 1.7cqw; }
+
+.display-bottom {
+  margin-top: 1rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(240px, 320px);
+  gap: 1rem;
+  align-items: start;
+}
+.display-bottom .join-qr { width: 220px; }
+.display-bottom .players { max-height: none; }
+.display-bottom .players ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.6rem 1rem;
+}
+
+@media (max-width: 900px) {
+  .display-bottom { grid-template-columns: 1fr; }
+  .display-bottom .join-qr { width: auto; }
+}
+
+.join-qr { text-align: center; }
+.qr-box {
+  width: min(100%, 200px);
+  margin: 0 auto;
+  background: #fff; /* QR codes need a light background to scan reliably */
+  border-radius: 10px;
+  padding: 6px;
+  line-height: 0;
+}
+.qr-box svg { width: 100%; height: auto; }
+.qr-url { margin-top: 0.4rem; font-size: 0.85rem; color: var(--muted); word-break: break-all; }
 
 @media (max-width: 900px) {
   .top { grid-template-columns: 1fr; }

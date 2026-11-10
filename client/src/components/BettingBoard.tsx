@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { BOARD_H, BOARD_W, SPOTS, colorOf, type Spot } from '../../../shared/roulette';
+import { BOARD_H, BOARD_W, colorOf, getSpots, type Spot } from '../../../shared/roulette';
 import type { Bet, GameState } from '../../../shared/types';
 
 const CELL_KINDS = new Set(['straight', 'dozen', 'column', 'low', 'high', 'odd', 'even', 'red', 'black']);
@@ -11,7 +11,7 @@ const py = (v: number) => `${(v / BOARD_H) * 100}%`;
 function cellRect(s: Spot) {
   let w = 1;
   let h = 1;
-  if (s.kind === 'straight' && s.numbers[0] === 0) h = 3;
+  if (s.cellH) h = s.cellH; // zero cells share the zero column
   else if (s.kind === 'dozen') w = 4;
   else if (s.kind !== 'straight' && s.kind !== 'column') w = 2;
   return { left: px(s.x - w / 2), top: py(s.y - h / 2), width: px(w), height: py(h) };
@@ -33,9 +33,11 @@ interface Props {
   interactive: boolean;
   onPlace: (spot: string) => void;
   onRemove: (spot: string) => void;
+  /** Turn the layout 90° (zero at the top) with labels kept upright. */
+  rotated?: boolean;
 }
 
-export default function BettingBoard({ state, playerId, interactive, onPlace, onRemove }: Props) {
+export default function BettingBoard({ state, playerId, interactive, onPlace, onRemove, rotated }: Props) {
   const [hover, setHover] = useState<Spot | null>(null);
   const colors = useMemo(() => new Map(state.players.map((p) => [p.id, p])), [state.players]);
   const winner = state.phase === 'results' && state.spin ? state.spin.result : null;
@@ -47,8 +49,9 @@ export default function BettingBoard({ state, playerId, interactive, onPlace, on
   }, [state.bets]);
 
   const highlighted = new Set(hover?.numbers ?? []);
-  const cells = SPOTS.filter((s) => CELL_KINDS.has(s.kind));
-  const hotspots = SPOTS.filter((s) => !CELL_KINDS.has(s.kind));
+  const spots = getSpots(state.settings.wheel);
+  const cells = spots.list.filter((s) => CELL_KINDS.has(s.kind));
+  const hotspots = spots.list.filter((s) => !CELL_KINDS.has(s.kind));
 
   const handlers = (s: Spot) =>
     interactive
@@ -64,8 +67,8 @@ export default function BettingBoard({ state, playerId, interactive, onPlace, on
       : {};
 
   return (
-    <div className="board-scroll">
-      <div className={`board ${interactive ? 'interactive' : ''}`}>
+    <div className={rotated ? 'board-rotated-frame' : 'board-scroll'}>
+      <div className={`board ${interactive ? 'interactive' : ''} ${rotated ? 'rotated' : ''}`}>
         {cells.map((s) => {
           const n = s.numbers[0];
           const color = s.kind === 'straight' ? colorOf(n) : 'felt';
@@ -81,7 +84,7 @@ export default function BettingBoard({ state, playerId, interactive, onPlace, on
               title={`${s.label} — pays ${s.payout} to 1`}
               {...handlers(s)}
             >
-              {cellLabel(s)}
+              <span className="cell-label">{cellLabel(s)}</span>
             </div>
           );
         })}
@@ -103,7 +106,7 @@ export default function BettingBoard({ state, playerId, interactive, onPlace, on
           ))}
 
         {[...betsBySpot].map(([spotId, bets]) => {
-          const s = SPOTS.find((sp) => sp.id === spotId);
+          const s = spots.byId.get(spotId);
           if (!s) return null;
           const won = winner !== null ? s.numbers.includes(winner) : null;
           return (
@@ -124,7 +127,7 @@ export default function BettingBoard({ state, playerId, interactive, onPlace, on
                     }}
                     title={`${p?.name ?? 'Player'}: ${b.amount} on ${s.label}`}
                   >
-                    {formatChips(b.amount)}
+                    <span className="chip-amt">{formatChips(b.amount)}</span>
                   </div>
                 );
               })}
