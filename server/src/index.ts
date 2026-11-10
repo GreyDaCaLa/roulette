@@ -361,9 +361,23 @@ class Game {
 // ---------------------------------------------------------------------------
 // HTTP + Socket.IO
 // ---------------------------------------------------------------------------
+// Comma-separated list of other sites allowed to connect, e.g. your Netlify URL.
+// Not needed when this server also serves the client (same origin).
+const CLIENT_ORIGINS = (process.env.CLIENT_ORIGIN ?? '')
+  .split(',')
+  .map((s) => s.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+
 const app = express();
 const httpServer = createServer(app);
-const io = new Server(httpServer);
+const io = new Server(httpServer, {
+  cors: CLIENT_ORIGINS.length ? { origin: CLIENT_ORIGINS } : undefined,
+});
+
+// Health check for the hosting platform.
+app.get('/healthz', (_req, res) => {
+  res.send('ok');
+});
 
 const game = new Game(() => io.emit('state', game.snapshot()));
 

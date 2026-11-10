@@ -2,9 +2,11 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { io } from 'socket.io-client';
 import type { Ack, GameState, JoinAck, TableSettings } from '../../shared/types';
 
-// Same origin: Vite proxies /socket.io to the game server in dev,
+// By default, connect to the same origin: Vite proxies /socket.io to the game server in dev,
 // and the game server serves the built client in production.
-const socket = io();
+// When the client is hosted separately (e.g. Netlify), set VITE_SERVER_URL at build time.
+const SERVER_URL = import.meta.env.VITE_SERVER_URL as string | undefined;
+const socket = SERVER_URL ? io(SERVER_URL) : io();
 
 interface Store {
   state: GameState | null;

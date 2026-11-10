@@ -1,0 +1,20 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# One web service that runs the game server and also serves the built client.
+services:
+  - type: web
+    name: roulette
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Optional table defaults (the host can change these in game):
+      # - key: STARTING_BALANCE
+      #   value: "1000"
+      # When the client moves to Netlify, add your Netlify URL here:
+      # - key: CLIENT_ORIGIN
+      #   value: https://your-site.netlify.app
